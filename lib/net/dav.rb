@@ -108,7 +108,7 @@ module Net #:nodoc:
           end
         headers.each_pair { |key, value| req[key] = value } if headers
         res = handle_request(req, headers, MAX_REDIRECTS, &block)
-        res.body
+        res
       end
 
       def request(verb, path, body, headers)
@@ -143,57 +143,55 @@ module Net #:nodoc:
       end
 
       def handle_request(req, headers, limit = MAX_REDIRECTS, &block)
-        # You should choose better exception.
-        raise ArgumentError, 'HTTP redirect too deep' if limit == 0
+ 
+      	raise ArgumentError, 'HTTP redirect too deep' if limit == 0
+      	response = nil
 
-        response = nil
-        if block
-          @http.request(req) {|res|
-            # Only start returning a body if we will not retry
-            res.read_body nil, &block if !res.is_a?(Net::HTTPUnauthorized) && !res.is_a?(Net::HTTPRedirection)
-            response = res
-          }
-        else
-          response = @http.request(req)
-        end
-        case response
-        when Net::HTTPSuccess     then
-          return response
-        when Net::HTTPUnauthorized     then
-          response.error! unless @user
-          response.error! if req['authorization']
-          new_req = clone_req(req.path, req, headers)
-          if response['www-authenticate'] =~ /^Basic/
+      	if @user
+            new_req = clone_req(req.path, req, headers)
             if disable_basic_auth
-              raise "server requested basic auth, but that is disabled"
+          	digest_auth(new_req, @user, @pass, response)
+            else
+          	new_req.basic_auth @user, @pass
             end
-            new_req.basic_auth @user, @pass
-          else
-            digest_auth(new_req, @user, @pass, response)
-          end
-          return handle_request(new_req, headers, limit - 1, &block)
+            req = new_req
+      	end
+	if block
+            @http.request(req) {|res|
+          	# Only start returning a body if we will not retry
+          	res.read_body nil, &block if !res.is_a?(Net::HTTPUnauthorized) && !res.is_a?(Net::HTTPRedirection)
+          	response = res
+            }
+      	else
+            response = @http.request(req)
+      	end
+      
+	case response
+        when Net::HTTPUnauthorized then
+            raise ArgumentError, "Incorrect authentication"
+            return handle_request(new_req, headers, limit - 1, &block)
         when Net::HTTPRedirection then
-          location = URI.parse(response['location'])
-          if (@uri.scheme != location.scheme ||
-              @uri.host != location.host ||
-              @uri.port != location.port)
-            raise ArgumentError, "cannot redirect to a different host #{@uri} => #{location}"
-          end
-          new_req = clone_req(location.path, req, headers)
-          return handle_request(new_req, headers, limit - 1, &block)
+            location = URI.parse(response['location'])
+            if (@uri.scheme != location.scheme ||
+        	@uri.host != location.host ||
+                @uri.port != location.port)
+                raise ArgumentError, "cannot redirect to a different host #{@uri} => #{location}"
+            end
+            new_req = clone_req(location.path, req, headers)
+            return handle_request(new_req, headers, limit - 1, &block)
         else
-          response.error!
+            return response
         end
       end
 
       def clone_req(path, req, headers)
         new_req = req.class.new(path)
+	new_req = req
         new_req.body = req.body if req.body
-        if (req.body_stream)
-          req.body_stream.rewind
+        if req.body_stream
           new_req.body_stream = req.body_stream
+	  new_req.body_stream.rewind
         end
-        new_req.content_length = req.content_length if req.content_length
         headers.each_pair { |key, value| new_req[key] = value } if headers
         return new_req
       end
@@ -522,7 +520,7 @@ module Net #:nodoc:
     def put(path, stream, length)
       path = @uri.merge(path).path
       res = @handler.request_sending_stream(:put, path, stream, length, nil)
-      res.body
+      res
     end
 
     # Stores the content of a string to a URL
@@ -543,7 +541,7 @@ module Net #:nodoc:
     def delete(path)
       path = @uri.merge(path).path
       res = @handler.request(:delete, path, nil, nil)
-      res.body
+      res
     end
 
     # Send a move request to the server.
@@ -611,6 +609,7 @@ module Net #:nodoc:
      headers = {'Lock-Token' => '<'+locktoken+'>'}
      path = @uri.merge(path).path
      res = @handler.request(:unlock, path, nil, headers)
+     res
     end
 
     # Returns true if resource exists on server.
